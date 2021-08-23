@@ -1,0 +1,181 @@
+---
+title: "Анализ сетей книг"
+author: "Иванов Павел, paivanov_2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+library(DT)
+library(igraph)
+library(dplyr)
+comics_net = read_graph("~/shared/minor2_2020/data/good_read/book_net.hml", 
+                        format = "graphml")
+load("~/shared/minor2_2020/data/good_read/books_net_info.RData")
+ID=V(comics_net)$name
+ID=as.numeric(ID)
+IData=as.data.frame(ID)
+colnames(IData)=c("book_id")
+IDbooks_net_info=inner_join(by="book_id", IData, books_net_info)
+```
+
+## Исследовательские вопросы
+
+1) Комиксы каких издательств представляют самые важные узлы сети?
+2) Склонны ли узлы формировать связи с другими узлами одних временных промежутков, в которые были изданы комиксы?
+
+## Выявление значимых вершин
+
+Для ответа на первый исследовательский вопрос, можно прибегнуть к использованию метрик центральности, в данном случае двух из них: degree и betweenness.
+
+В первом случае можно рассчитать средний уровень degree для комиксов каждого из издательств и посмотреть, какие из издательств имеют наибольший показатель в рамках этой метрики, т.е. имеют наибольшее количество связей.
+
+
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+pub=IDbooks_net_info%>%filter(publisher!="")
+V(comics_net)$P=IDbooks_net_info$publisher
+deg=degree(comics_net)
+degdata=tibble::enframe(deg)
+colnames(degdata)=c("book_id", "degree")
+degdata$degree=as.numeric(degdata$degree)
+degdata$book_id=as.numeric(degdata$book_id)
+toppub=inner_join(by="book_id", degdata, IDbooks_net_info)
+toppub=toppub%>%group_by(publisher)%>%summarize(meanD=round(mean(degree),2))%>%arrange(-meanD)
+A=top_n(toppub, n=10)
+datatable(A)
+```
+
+Согласно результатам, отображающим наибольшие средние показатели degree, комиксы данных издательств имеют наибольшее количество связей, т.е. в рамках этой метрики комиксы этих ихдательств можно было бы рассматривать как важные узлы сети.
+
+Однако, одной метрики мало для ответа на поставленный вопрос, поэтому можно применить следующую - betweenness, отображающую долю кратчайших путей, проходящих через вершину. Как и в первом случае, можно рассчитать среднюю битвинность для комиксов разных издательств и посмотреть, какие из них имеют наибольший показатель.
+
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+bet=betweenness(comics_net)
+betdata=tibble::enframe(bet)
+colnames(betdata)=c("book_id", "betweenness")
+betdata$betweenness=as.numeric(betdata$betweenness)
+betdata$book_id=as.numeric(betdata$book_id)
+toppub1=inner_join(by="book_id", IDbooks_net_info, betdata)
+toppub1=toppub1%>%group_by(publisher)%>%summarise(meanB=round(mean(betweenness),2))%>%arrange(-meanB)
+V(comics_net)$meanB=toppub1$meanB
+B=top_n(toppub1, n=10)
+datatable(B)
+```
+
+Комиксы данных издательств, согласно среднему значению битвинности, имеют наибольшую долю кратчайших путей, проходящих через узлы, которые они представляют на графе, т.е. в рамках использованной метрики их можно рассматривать как самые важные в сети. В случае использования этой метрики результаты другие, большая часть издательств, присутствующих в первом списке, во второй не попало.
+
+#### Визуализация
+
+Для наглядности, результаты можно визуализировать на графах, отметив разными цветами разные издательства, а размер узлов сделав пропорциональным degree в первом случае и betweenness во втором. По причине того, что наблюдений слишком много, можно ограничить список издательств, поставив порог для degree и betweenness
+
+Граф для degree:
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+library(ggraph)
+V(comics_net)$degree=degree(comics_net)
+comics_net2 = delete.vertices(comics_net, which (V(comics_net)$degree < 50))
+comics_net2 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.3) +
+  geom_node_point(aes(color=V(comics_net2)$P, size=degree(comics_net2)*100))+
+  theme_graph()
+```
+
+
+Граф для betweenness:
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+V(comics_net)$bet=betweenness(comics_net)
+comics_net3 = delete.vertices(comics_net, which (V(comics_net)$bet < 1500))
+comics_net3 %>% 
+  ggraph(layout = "nicely") +
+  geom_edge_link(alpha = 0.3) +
+  geom_node_point(aes(color=V(comics_net3)$P, size=betweenness(comics_net3)*100))+
+  theme_graph()
+```
+
+#### Выводы
+
+Обе метрики используют разные подходы к оценки центральности узлов, по этой причине были получены разные результаты, издательства, которые имеют наибольшую среднюю degree, отличаются от издательств, имеющих наибольшую betweenness. Тем не менее, два издательства встречаются в рамках использования и первой, и второй метрик, т.е. вошли в оба списка, а именно America's Best Comics (4-ое место по degree, 7-ое по betweenness) и Vertigo (2-ое место по degree, 10-ое по betweenness). Подводя итог, их можно рассматривать комиксы этих издательств можно рассматриватьк как важные узлы в сети, учитывая то, что в случае c оценками и средней degree, и средней betweenness, они вошли в список 10 издательств, имеющих наибольший показатель среди остальных. 
+
+## Выявление групп книг и визуализация сообществ на графе
+
+Для ответа на второй исследовательский вопрос можно прибегнуть к разбиению сети на сообщества. Во-первых, следует определиться, какие группы среди годов изданий можно выделить. По причине того, в разые года было издано разное количество книг, следует выделить временные промежутки, в которых количество наблюдений было бы более менее равномерно распределено. Например, можно рассмотреть следующие периоды: до 2005 года, 2005-2010, 2010-2015, после 2015 
+
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+books_net_info_Y=IDbooks_net_info%>%na.omit(publication_year)
+books_net_info_Y$publication_year=as.numeric(books_net_info_Y$publication_year)
+books_net_info_Y=books_net_info_Y%>%mutate(time_period=case_when(publication_year<2005 ~ "до 2005",
+                                                          publication_year>=2005&publication_year<2010 ~ "2005-2010",
+                                                          publication_year>=2010&publication_year<2015 ~ "2010-2015",
+                                                          publication_year>=2015 ~ "после 2015"))
+books_net_info_Y$time_period=as.factor(books_net_info_Y$time_period)
+books_net_info_Y=books_net_info_Y%>%na.omit(time_period)
+V(comics_net)$Y=books_net_info_Y$time_period
+C=books_net_info_Y%>%group_by(time_period)%>%count()
+datatable(C)
+```
+```{r echo=, message=FALSE, warning=FALSE, paged.print=FALSE}
+plot(comics_net, 
+     vertex.color = V(comics_net)$Y, 
+     vertex.label = NA) 
+legend("bottomright", legend = c("до 2005", "2005-2010", "2010-2015", "после 2015"), pch = c(20, 20, 20, 20), col = c("cyan", "blue", "green", "orange"), cex = 0.6)
+```
+
+Для оценки того, в какой степени узлы со схожими свойствами(в нашем случае узлы, представляющие комиксы, изданные в один промежуток времени) склонны иметь связи друг с другом, можно посчитать коэффициент ассортативности и проверить его с помощью теста перестановок
+
+Коэффициент ассортативности:
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+assortativity_nominal(comics_net, V(comics_net)$Y, directed = F)
+```
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+cn = comics_net
+set.seed(123)
+number_of_permutations = 2000
+assortativity_shuffled  <- rep(NA, number_of_permutations)
+for(i in 1:number_of_permutations){
+  V(cn)$attr_shuffled = sample(V(cn)$Y, replace = F)
+  assortativity_shuffled[i] = assortativity_nominal(cn,as.factor(V(cn)$attr_shuffled))
+}
+```
+
+
+```{r message=FALSE, warning=FALSE}
+assortativity_real = assortativity_nominal(cn, V(cn)$Y, directed = F)
+```
+p-value:
+```{r message=FALSE, warning=FALSE, echo = FALSE}
+pvalue = sum(abs(assortativity_shuffled) >= abs(assortativity_real)) / number_of_permutations
+pvalue
+```
+Учитывая, что p-value равен 0, нельзя утверждать, что коэффициент ассортативности получился случайно.
+
+#### Визуализация
+Для визуализации можно использовать метод edge betweenness, заключающийся в последовательном удалении связей в порядке убывания значения битвинности ребер
+```{r echo=, message=FALSE, warning=FALSE}
+comcommun1 <- edge.betweenness.community(comics_net)
+membership(comcommun1) 
+plot(comcommun1, comics_net, 
+     vertex.color = V(comics_net)$N, 
+     vertex.label = NA) 
+title("Разбиение сети комиксов разных\n временных промежутков на группы\n")
+cex.main = 1
+legend("bottomright", legend = c("до 2005", "2005-2010", "2010-2015", "после 2015"), pch = c(20, 20, 20, 20), col = c("cyan", "blue", "green", "orange"), cex = 0.6)
+```
+
+
+
+
+
+#### Выводы
+Несмотря на то, что нет возможности сказать, получился ли большой коэффициент или маленький, можно отметить, что он положительный, а значит корреляция существует, и узлы комиксов из одного временного промежутка, хоть и в неопределенной степени, но склонны образовывать связи с другими узлами, обладающими тем же аттрибутом.
+
+## Общие выводы
+В итоге, на поставленные в начале исследовательские вопросы были даны следующие ответы. 
+1) В случае издательств, представляющих важные узлы, можно выделить Vertigo и America's Best Comics. С другой стороны, этот вывод основывается лишь на применении 2-ух метрик (degree и betweenness); возможно, для получения более точных результатов, было бы целесообразно использовать другие метрики (например, closeness и eigen-centrality), которые могли бы либо подтвердить полученные изначально выводы, либо, наоборот, опровергнуть их. 
+2) Что касается склонности узлов образовывать связи с узлами с тем же аттрибутом, а именно временным промежутком, в который была выпущена книга, можно отметить выявленную корреляцию. Тем не менее, в этом случае есть 2 проблемы: во-первых, нет возможности оценить степень склонности; во-вторых, результат довольно условен, так как временные промежутки были определены изначально, возможно, если бы были выделены иные периоды, то и результаты получились бы другими.
